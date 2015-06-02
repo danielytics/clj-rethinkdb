@@ -42,7 +42,7 @@
   (print-method (:conn r) writer))
 
 (defn connection [m]
-  (->Connection (atom m)))
+  (->Connection (agent m)))
 
 (defn connect
   [& {:keys [host port token auth-key]
@@ -69,3 +69,4 @@
          :waiting #{}
          :token token}
         (make-connection-loops in out)))))
+

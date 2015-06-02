@@ -121,23 +121,36 @@
     (async/close! r-ch)))
 
 
-(defn send-query-async* [conn token query]
-  (let [chan (async/chan)
-        {:keys [pub ch]} @conn]
+(defn send-query-async* [conn cbch token query]
+  (let [{:keys [pub ch]} @conn
+        chan (async/chan)]
     (async/sub pub token chan)
     (async/>!! ch [token query])
-    (let [[recvd-token json] (async/<!! chan)]
-      (when-not (= recvd-token token)
-        (println "Got:" recvd-token "expected:" token)
-        (println json))
-      (assert (= recvd-token token))
-      (async/unsub pub token chan)
-      (json/read-str json :key-fn keyword))))
+    (println "Waiting" cbch)
+    (cond
+      (fn? cbch)
+        (do ;async/go
+            (println "Callback")
+          (when-let [[recvd-token result] (async/<!! chan)]
+            (println "Got" recvd-token)
+            (assert (= recvd-token token))
+            (when (= recvd-token token)
+              (cbch (json/read-str :key-fn keyword)))))
+      (nil? cbch)
+        (let [[recvd-token json] (async/<!! chan)]
+          (assert (= recvd-token token))
+          (async/unsub pub token chan)
+          (json/read-str json :key-fn keyword))
+      :else
+        (async/go
+          (when-let [[recvd-token result] (async/<! chan)]
+            (when (= recvd-token token)
+              (async/>! cbch (json/read-str :key-fn keyword))))))))
 
 
-(defn send-query-async [conn token query]
+(defn send-query-async [conn token chan query]
   (let [json (json/write-str query)
-        {type :t resp :r} (send-query-async* conn token json) 
+        {type :t resp :r} (send-query-async* conn chan token json) 
         resp (parse-response resp)]
     (condp get type
       #{1} (first resp)
@@ -155,11 +168,11 @@
 (def send-query send-query-async)
 
 
-(defn send-start-query [conn token query]
-  (send-query conn token (parse-query :START query)))
+(defn send-start-query [conn token chan query]
+  (send-query conn token chan (parse-query :START query)))
 
-(defn send-continue-query [conn token]
-  (send-query conn token (parse-query :CONTINUE)))
+(defn send-continue-query [conn token chan]
+  (send-query conn token chan (parse-query :CONTINUE)))
 
-(defn send-stop-query [conn token]
-  (send-query conn token (parse-query :STOP)))
+(defn send-stop-query [conn token chan]
+  (send-query conn token chan (parse-query :STOP)))

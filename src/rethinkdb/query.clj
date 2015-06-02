@@ -2,7 +2,8 @@
   (:refer-clojure :exclude [count filter map get not mod replace merge
                             reduce make-array distinct keys nth min max
                             or and do fn sync time update])
-  (:require [clojure.data.json :as json]
+  (:require [clojure.core.async :as async]
+            [clojure.data.json :as json]
             [clojure.walk :refer [postwalk postwalk-replace]]
             [rethinkdb.net :refer [send-start-query] :as net]
             [rethinkdb.query-builder :refer [term parse-term]]))
@@ -905,6 +906,18 @@
 (defn make-array [& xs]
   (term :MAKE_ARRAY xs))
 
-(defn run [query conn]
-  (let [token (:token (swap! (:conn conn) update-in [:token] inc))]
-    (send-start-query conn token (replace-vars query))))
+(defn run [query conn & [cb-or-ch]]
+  (let [token (:token (swap! (:conn conn) update-in [:token] inc))
+        chan  (or (when-not (fn? cb-or-ch) cb-or-ch) (async/chan))]
+    (send-off (:conn conn) send-start-query token chan (replace-vars query))
+    (cond
+      ;; If third argument is nil (or missing), block until result is available
+      (nil? cb-or-ch) (async/<!! chan)
+      ;; If third argument is a fn, asynchronously take and call the fn with
+      ;; result
+      (fn? cb-or-ch)  (async/take! chan cb-or-ch true)
+      ;; If the third argument is not a fn, then assume its a channel and return
+      ;; it untouched
+      :else           chan)
+    #_(send-start-query conn {:cbch cb-or-ch :token token} (replace-vars query))))
+

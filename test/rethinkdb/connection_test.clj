@@ -1,5 +1,6 @@
 (ns rethinkdb.connection-test
   (:require [clj-time.core :as t]
+            [clojure.core.async :as async]
             [clojure.test :refer :all]
             [rethinkdb.core :refer :all]
             [rethinkdb.query :as r]))
@@ -41,11 +42,41 @@
         (with-open [conn (connect)]
           (r/run query conn)))))
 
-  (println "performance (reusing connection")
+  (println "performance (reusing connection)")
   (time
     (with-open [conn (connect)]
       (doseq [n (range 100)]
         (r/run query conn))))
+
+  (println "performance (reusing connection; callback)")
+  (let [c (atom 0)]
+    (with-open [conn (connect)]
+      (time
+        (doseq [n (range 100)]
+          (r/run query conn #(do
+                               (println "inc")
+                               (swap! c inc)))))
+      (Thread/sleep 2000))
+    (is (= 100 @c)))
+
+  (println "performance (reusing connection; core.async)")
+  (let [ch (async/chan)]
+    (time
+      (with-open [conn (connect)]
+        (doseq [n (range 100)]
+          (r/run query conn ch))))
+    (Thread/sleep 2000)
+    (let [c (atom 0)]
+      (println 
+        (async/go-loop []
+          (if-let [value (async/<! ch)]
+            (do
+              (println @c)
+              (swap! c inc)
+              (recur))
+            :hello)))
+    (Thread/sleep 2000)
+      (is (= @c 100))))
 
   (println "performance (parallel, one connection)")
   (with-open [conn (connect)]
@@ -54,7 +85,7 @@
         (pmap (fn [v] (r/run query conn))
               (range 100)))))
 
-  (println "performance (pooled connection")  
+  (println "performance (pooled connection)")  
   #_(with-open [conn connect]
     nil)
     
